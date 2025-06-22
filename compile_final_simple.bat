@@ -12,7 +12,7 @@ echo Visual Studio environment not found, trying direct compilation...
 
 :compile
 echo Starting compilation...
-cl /EHsc final_simple_ui.cpp /Fe:final_simple_ui.exe user32.lib gdi32.lib comctl32.lib /link /SUBSYSTEM:WINDOWS
+cl /EHsc /utf-8 final_simple_ui.cpp /Fe:final_simple_ui.exe user32.lib gdi32.lib comctl32.lib /link /SUBSYSTEM:WINDOWS
 
 if %ERRORLEVEL% EQU 0 (
     echo Compilation successful!

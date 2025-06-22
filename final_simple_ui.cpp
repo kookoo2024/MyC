@@ -10,6 +10,8 @@
 #include <string>
 #include <cstdlib>
 #include <ctime>
+#include <vector> // For std::vector
+#include <vector> // For std::vector
 
 // Control IDs
 #define ID_LISTBOX 1001
@@ -130,26 +132,63 @@ void InitializePresets() {
     wcscpy(presets[presetCount].name, L"ABC");
     wcscpy(presets[presetCount].keys, L"a+b+c");
     presetCount++;
+
+    // User-requested presets
+    // C-C = ctrl+c
+    wcscpy(presets[presetCount].name, L"C-C");
+    wcscpy(presets[presetCount].keys, L"ctrl+c");
+    presetCount++;
+
+    // C-V = ctrl+v
+    wcscpy(presets[presetCount].name, L"C-V");
+    wcscpy(presets[presetCount].keys, L"ctrl+v");
+    presetCount++;
+
+    // B-1 = 0+0+0+tab
+    wcscpy(presets[presetCount].name, L"B-1");
+    wcscpy(presets[presetCount].keys, L"0+0+0+tab");
+    presetCount++;
 }
 
 // Parse key combination string (e.g., "1+2+a+3")
 void ParseKeyCombo(const wchar_t* combo, wchar_t* keys, int maxKeys, int* keyCount) {
     *keyCount = 0;
     int len = wcslen(combo);
-    int keyIndex = 0;
+    int i = 0;
 
-    for (int i = 0; i < len && *keyCount < maxKeys; i++) {
-        if (combo[i] != L'+' && combo[i] != L' ') {
-            keys[*keyCount] = combo[i];
-            (*keyCount)++;
+    while (i < len && *keyCount < maxKeys) {
+        // Skip delimiters
+        while (i < len && (combo[i] == L'+' || combo[i] == L' ')) {
+            i++;
         }
+        if (i >= len) break;
+
+        // Check for multi-character key names
+        if (wcsncmp(&combo[i], L"ctrl", 4) == 0) {
+            keys[*keyCount] = L'c'; // Internal representation for VK_CONTROL
+            i += 4;
+        } else if (wcsncmp(&combo[i], L"alt", 3) == 0) {
+            keys[*keyCount] = L'a'; // Internal representation for VK_MENU
+            i += 3;
+        } else if (wcsncmp(&combo[i], L"tab", 3) == 0) {
+            keys[*keyCount] = L't'; // Internal representation for VK_TAB
+            i += 3;
+        } else if (wcsncmp(&combo[i], L"space", 5) == 0) {
+            keys[*keyCount] = L' '; // Internal representation for VK_SPACE
+            i += 5;
+        } else {
+            // Single character key
+            keys[*keyCount] = combo[i];
+            i++;
+        }
+        (*keyCount)++;
     }
 }
 
 // Update preset combo box
 void UpdatePresetCombo() {
     SendMessage(hComboPresets, CB_RESETCONTENT, 0, 0);
-    SendMessage(hComboPresets, CB_ADDSTRING, 0, (LPARAM)L"Select preset...");
+    SendMessage(hComboPresets, CB_ADDSTRING, 0, (LPARAM)L"选择预设...");
 
     for (int i = 0; i < presetCount; i++) {
         wchar_t displayText[200];
@@ -172,7 +211,6 @@ WORD GetVirtualKeyFromChar(wchar_t ch) {
 
     // Special characters
     switch (ch) {
-        case L' ': return VK_SPACE;
         case L'.': return VK_OEM_PERIOD;
         case L',': return VK_OEM_COMMA;
         case L';': return VK_OEM_1;
@@ -184,6 +222,10 @@ WORD GetVirtualKeyFromChar(wchar_t ch) {
         case L'\'': return VK_OEM_7;
         case L'-': return VK_OEM_MINUS;
         case L'=': return VK_OEM_PLUS;
+        case L' ': return VK_SPACE;
+        case L't': return VK_TAB;
+        case L'c': return VK_CONTROL;
+        case L'a': return VK_MENU;
         default: return 0;
     }
 }
@@ -204,7 +246,7 @@ void SimulateSingleKey() {
     WORD vk = GetVirtualKeyFromChar(key);
 
     if (vk == 0) {
-        AddLog(L"[Error] Unsupported key character");
+        AddLog(L"[错误] 不支持的按键字符");
         return;
     }
 
@@ -224,32 +266,59 @@ void SimulateSingleKey() {
     SendInput(1, &input, sizeof(INPUT));
 }
 
-// Simulate key sequence (individual keys with delays)
+// Simulate key sequence (individual keys with delays, handles modifiers)
 void SimulateKeySequence(const wchar_t* combo) {
-    wchar_t keys[20];
+    wchar_t parsedKeys[20];
     int keyCount = 0;
 
-    ParseKeyCombo(combo, keys, 20, &keyCount);
+    ParseKeyCombo(combo, parsedKeys, 20, &keyCount);
 
     if (keyCount == 0) {
-        AddLog(L"[Error] No valid keys in sequence");
+        AddLog(L"[错误] 序列中没有有效按键");
         return;
     }
 
-    // Simulate each key individually with random delays
-    for (int i = 0; i < keyCount && isAutoZeroRunning; i++) {
-        WORD vk = GetVirtualKeyFromChar(keys[i]);
+    std::vector<WORD> modifierKeys;
+    std::vector<WORD> regularKeys;
+
+    // Separate modifier keys from regular keys
+    for (int i = 0; i < keyCount; i++) {
+        WORD vk = GetVirtualKeyFromChar(parsedKeys[i]);
+        if (vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT) { // VK_MENU is Alt
+            modifierKeys.push_back(vk);
+        } else {
+            regularKeys.push_back(vk);
+        }
+    }
+
+    // Press down all modifier keys
+    for (WORD vk : modifierKeys) {
+        INPUT input = {0};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vk;
+        input.ki.dwFlags = 0; // Key down
+        SendInput(1, &input, sizeof(INPUT));
+        wchar_t logMsg[100];
+        if (vk == VK_CONTROL) wsprintf(logMsg, L"[序列] 按下修饰键: Ctrl");
+        else if (vk == VK_MENU) wsprintf(logMsg, L"[序列] 按下修饰键: Alt");
+        else if (vk == VK_SHIFT) wsprintf(logMsg, L"[序列] 按下修饰键: Shift");
+        else wsprintf(logMsg, L"[序列] 按下修饰键: %d", vk); // Fallback for other modifiers
+        AddLog(logMsg);
+    }
+
+    // Simulate regular keys with delays
+    for (size_t i = 0; i < regularKeys.size() && isAutoZeroRunning; i++) {
+        WORD vk = regularKeys[i];
         if (vk == 0) {
             wchar_t errorMsg[100];
-            wsprintf(errorMsg, L"[Error] Unsupported key: '%c'", keys[i]);
+            // For error, try to show original character if possible, or a generic error
+            wsprintf(errorMsg, L"[错误] 不支持的按键: '%c'", parsedKeys[i]);
             AddLog(errorMsg);
             continue;
         }
 
-        // Check if still running before pressing key
         if (!isAutoZeroRunning) break;
 
-        // Simulate single key press
         INPUT input = {0};
         input.type = INPUT_KEYBOARD;
         input.ki.wVk = vk;
@@ -258,27 +327,44 @@ void SimulateKeySequence(const wchar_t* combo) {
         input.ki.dwFlags = 0;
         SendInput(1, &input, sizeof(INPUT));
 
-        // Random key hold duration (10ms to user-defined max)
+        // Random key hold duration
         Sleep(GetRandomKeyDuration());
 
         // Release
         input.ki.dwFlags = KEYEVENTF_KEYUP;
         SendInput(1, &input, sizeof(INPUT));
 
-        // Log individual key press
         wchar_t keyLog[100];
-        wsprintf(keyLog, L"[Sequence] Pressed key '%c' (%d/%d)", keys[i], i + 1, keyCount);
+        // Improved logging for regular keys
+        if (vk == VK_TAB) wsprintf(keyLog, L"[序列] 按下按键 'Tab' (%d/%d)", (int)i + 1, (int)regularKeys.size());
+        else if (vk == VK_SPACE) wsprintf(keyLog, L"[序列] 按下按键 'Space' (%d/%d)", (int)i + 1, (int)regularKeys.size());
+        else wsprintf(keyLog, L"[序列] 按下按键 '%c' (%d/%d)", parsedKeys[i], (int)i + 1, (int)regularKeys.size());
         AddLog(keyLog);
 
         // Interruptible delay before next key (30-400ms), except for the last key
-        if (i < keyCount - 1) {
+        if (i < regularKeys.size() - 1) {
             int delayTime = GetRandomSequenceDelay();
             if (!InterruptibleDelay(delayTime)) {
-                // Stopped by global hotkey
-                AddLog(L"[Sequence] Stopped by hotkey during sequence");
+                AddLog(L"[序列] 在序列中被热键停止");
                 break;
             }
         }
+    }
+
+    // Release all modifier keys
+    for (WORD vk : modifierKeys) {
+        INPUT input = {0};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vk;
+        input.ki.dwFlags = KEYEVENTF_KEYUP; // Key up
+        SendInput(1, &input, sizeof(INPUT));
+        wchar_t logMsg[100];
+        // Improved logging for modifier keys release
+        if (vk == VK_CONTROL) wsprintf(logMsg, L"[序列] 释放修饰键: Ctrl");
+        else if (vk == VK_MENU) wsprintf(logMsg, L"[序列] 释放修饰键: Alt");
+        else if (vk == VK_SHIFT) wsprintf(logMsg, L"[序列] 释放修饰键: Shift");
+        else wsprintf(logMsg, L"[序列] 释放修饰键: %d", vk); // Fallback
+        AddLog(logMsg);
     }
 }
 
@@ -342,17 +428,17 @@ DWORD WINAPI ContinuousKeyThread(LPVOID lpParam) {
         // Update status
         if (mode == 0) { // Single
             wchar_t statusText[150];
-            wsprintf(statusText, L"[Single] Key %s press completed", keyName);
+            wsprintf(statusText, L"[单次] 按键 %s 完成", keyName);
             AddLog(statusText);
             break;
         } else if (mode == 1) { // Multiple
             wchar_t statusText[150];
-            wsprintf(statusText, L"[Multi] Pressed %s %d/5 times", keyName, pressCount);
+            wsprintf(statusText, L"[多次] 按下 %s %d/5 次", keyName, pressCount);
             AddLog(statusText);
         } else { // Infinite
             if (pressCount % 10 == 1 || pressCount <= 5) {
                 wchar_t statusText[150];
-                wsprintf(statusText, L"[Infinite] Pressed %s %d times", keyName, pressCount);
+                wsprintf(statusText, L"[无限] 按下 %s %d 次", keyName, pressCount);
                 AddLog(statusText);
             }
         }
@@ -373,11 +459,11 @@ DWORD WINAPI ContinuousKeyThread(LPVOID lpParam) {
     // Final status
     if (mode == 1) {
         wchar_t finalText[150];
-        wsprintf(finalText, L"[Multi] 5 %s key presses completed", keyName);
+        wsprintf(finalText, L"[多次] 5 次 %s 按键完成", keyName);
         AddLog(finalText);
     } else if (mode == 2 && !isAutoZeroRunning) {
         wchar_t finalStatus[150];
-        wsprintf(finalStatus, L"[Infinite] Stopped %s, total: %d presses", keyName, pressCount);
+        wsprintf(finalStatus, L"[无限] 停止 %s, 总计: %d 次按键", keyName, pressCount);
         AddLog(finalStatus);
     }
 
@@ -401,11 +487,11 @@ void StartKeySimulation() {
 
     wchar_t startMsg[100];
     if (currentMode == 0) {
-        wcscpy(startMsg, L"[Single] Starting key press...");
+        wcscpy(startMsg, L"[单次] 开始按键...");
     } else if (currentMode == 1) {
-        wcscpy(startMsg, L"[Multi] Starting 5 key presses...");
+        wcscpy(startMsg, L"[多次] 开始 5 次按键...");
     } else {
-        wcscpy(startMsg, L"[Infinite] Starting continuous key presses...");
+        wcscpy(startMsg, L"[无限] 开始连续按键...");
     }
     AddLog(startMsg);
 
@@ -413,7 +499,7 @@ void StartKeySimulation() {
     hAutoZeroThread = CreateThread(NULL, 0, ContinuousKeyThread, modePtr, 0, NULL);
 
     if (!hAutoZeroThread) {
-        AddLog(L"[Error] Failed to create thread");
+        AddLog(L"[错误] 创建线程失败");
         isAutoZeroRunning = false;
         delete modePtr;
     }
@@ -424,13 +510,13 @@ void StopKeySimulation() {
     if (!isAutoZeroRunning) return;
 
     isAutoZeroRunning = false;
-    AddLog(L"[Stop] Key simulation stopped");
+    AddLog(L"[停止] 按键模拟已停止");
 
     if (hAutoZeroThread) {
         // 等待线程结束，如果超时就强制终止
         DWORD waitResult = WaitForSingleObject(hAutoZeroThread, 1000);
         if (waitResult == WAIT_TIMEOUT) {
-            AddLog(L"[Warning] Thread timeout, forcing termination");
+            AddLog(L"[警告] 线程超时, 强制终止");
             TerminateThread(hAutoZeroThread, 0);
         }
         CloseHandle(hAutoZeroThread);
@@ -462,13 +548,13 @@ void ToggleWindow() {
 void ToggleTopmost() {
     if (isTopmost) {
         SetWindowPos(hMainWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-        SetWindowText(hButtonTopmost, L"Set Topmost");
-        AddLog(L"[Topmost] Window topmost disabled");
+        SetWindowText(hButtonTopmost, L"设为置顶");
+        AddLog(L"[置顶] 窗口置顶已禁用");
         isTopmost = false;
     } else {
         SetWindowPos(hMainWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-        SetWindowText(hButtonTopmost, L"Cancel Topmost");
-        AddLog(L"[Topmost] Window topmost enabled");
+        SetWindowText(hButtonTopmost, L"取消置顶");
+        AddLog(L"[置顶] 窗口置顶已启用");
         isTopmost = true;
     }
 }
@@ -480,106 +566,103 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             hMainWindow = hwnd;
             
             if (!RegisterHotKey(hwnd, HOTKEY_TOGGLE, 0, VK_OEM_3)) {
-                MessageBox(hwnd, L"Failed to register global hotkey!", L"Error", MB_OK | MB_ICONERROR);
+                MessageBox(hwnd, L"注册全局热键失败!", L"错误", MB_OK | MB_ICONERROR);
             }
 
-            // Create listbox (upper half)
+            // Log Area
+            CreateWindow(L"STATIC", L"运行时日志:",
+                WS_CHILD | WS_VISIBLE,
+                10, 10, 80, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
             hListBox = CreateWindow(L"LISTBOX", NULL,
                 WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER | LBS_NOTIFY,
-                10, 10, 280, 100, hwnd, (HMENU)ID_LISTBOX, GetModuleHandle(NULL), NULL);
+                10, 30, 360, 80, hwnd, (HMENU)ID_LISTBOX, GetModuleHandle(NULL), NULL);
 
-            // Create preset combination section
-            CreateWindow(L"STATIC", L"Preset Combos:",
+            // Control Panel
+            CreateWindow(L"BUTTON", L"控制面板",
+                WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                10, 120, 360, 80, hwnd, NULL, GetModuleHandle(NULL), NULL);
+
+            // First row: Preset and Topmost
+            CreateWindow(L"STATIC", L"预设:",
                 WS_CHILD | WS_VISIBLE,
-                10, 120, 80, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
-
+                20, 140, 40, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
             hComboPresets = CreateWindow(L"COMBOBOX", NULL,
                 WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                95, 118, 150, 150, hwnd, (HMENU)ID_COMBO_PRESETS, GetModuleHandle(NULL), NULL);
-
-            hButtonTopmost = CreateWindow(L"BUTTON", L"Topmost",
+                65, 138, 220, 150, hwnd, (HMENU)ID_COMBO_PRESETS, GetModuleHandle(NULL), NULL);
+            hButtonTopmost = CreateWindow(L"BUTTON", L"置顶",
                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                255, 118, 50, 22, hwnd, (HMENU)ID_BUTTON_TOPMOST, GetModuleHandle(NULL), NULL);
+                290, 138, 60, 22, hwnd, (HMENU)ID_BUTTON_TOPMOST, GetModuleHandle(NULL), NULL);
 
-            // Create key input section
-            CreateWindow(L"STATIC", L"Single Key:",
+            // Second row: Single key and mode
+            CreateWindow(L"STATIC", L"按键:",
                 WS_CHILD | WS_VISIBLE,
-                10, 150, 60, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
-
+                20, 170, 40, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
             hEditKeyInput = CreateWindow(L"EDIT", L"0",
                 WS_CHILD | WS_VISIBLE | WS_BORDER | ES_CENTER,
-                75, 148, 30, 22, hwnd, (HMENU)ID_EDIT_KEY_INPUT, GetModuleHandle(NULL), NULL);
+                65, 168, 50, 22, hwnd, (HMENU)ID_EDIT_KEY_INPUT, GetModuleHandle(NULL), NULL);
 
-            // Create custom preset section
-            CreateWindow(L"STATIC", L"Name:",
+            CreateWindow(L"STATIC", L"模式:",
                 WS_CHILD | WS_VISIBLE,
-                115, 150, 35, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-            hEditPresetName = CreateWindow(L"EDIT", L"",
-                WS_CHILD | WS_VISIBLE | WS_BORDER,
-                155, 148, 40, 22, hwnd, (HMENU)ID_EDIT_PRESET_NAME, GetModuleHandle(NULL), NULL);
-
-            CreateWindow(L"STATIC", L"Keys:",
-                WS_CHILD | WS_VISIBLE,
-                205, 150, 30, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-            hEditPresetKeys = CreateWindow(L"EDIT", L"",
-                WS_CHILD | WS_VISIBLE | WS_BORDER,
-                240, 148, 50, 22, hwnd, (HMENU)ID_EDIT_PRESET_KEYS, GetModuleHandle(NULL), NULL);
-
-            hButtonAddPreset = CreateWindow(L"BUTTON", L"Add",
-                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                295, 148, 30, 22, hwnd, (HMENU)ID_BUTTON_ADD_PRESET, GetModuleHandle(NULL), NULL);
-
-            // Create radio button group
-            hRadioSingle = CreateWindow(L"BUTTON", L"1x",
+                125, 170, 40, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            hRadioSingle = CreateWindow(L"BUTTON", L"单次",
                 WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
-                20, 180, 50, 25, hwnd, (HMENU)ID_RADIO_SINGLE, GetModuleHandle(NULL), NULL);
-
-            hRadioMulti = CreateWindow(L"BUTTON", L"Multi",
+                165, 168, 55, 22, hwnd, (HMENU)ID_RADIO_SINGLE, GetModuleHandle(NULL), NULL);
+            hRadioMulti = CreateWindow(L"BUTTON", L"5次",
                 WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                90, 180, 50, 25, hwnd, (HMENU)ID_RADIO_MULTI, GetModuleHandle(NULL), NULL);
-
-            hRadioInfinite = CreateWindow(L"BUTTON", L"Infinite",
+                220, 168, 45, 22, hwnd, (HMENU)ID_RADIO_MULTI, GetModuleHandle(NULL), NULL);
+            hRadioInfinite = CreateWindow(L"BUTTON", L"无限",
                 WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
-                160, 180, 70, 25, hwnd, (HMENU)ID_RADIO_INFINITE, GetModuleHandle(NULL), NULL);
-
-            // Default select "Infinite"
+                270, 168, 55, 22, hwnd, (HMENU)ID_RADIO_INFINITE, GetModuleHandle(NULL), NULL);
             SendMessage(hRadioInfinite, BM_SETCHECK, BST_CHECKED, 0);
 
-            // Create key duration setting
-            CreateWindow(L"STATIC", L"Key Duration (10-2000ms):",
+            // Custom Preset Area
+            CreateWindow(L"BUTTON", L"自定义预设",
+                WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                10, 210, 360, 50, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            CreateWindow(L"STATIC", L"名称:",
                 WS_CHILD | WS_VISIBLE,
-                20, 215, 120, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+                20, 230, 40, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            hEditPresetName = CreateWindow(L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_BORDER,
+                65, 228, 60, 22, hwnd, (HMENU)ID_EDIT_PRESET_NAME, GetModuleHandle(NULL), NULL);
+            CreateWindow(L"STATIC", L"按键:",
+                WS_CHILD | WS_VISIBLE,
+                130, 230, 40, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            hEditPresetKeys = CreateWindow(L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_BORDER,
+                175, 228, 125, 22, hwnd, (HMENU)ID_EDIT_PRESET_KEYS, GetModuleHandle(NULL), NULL);
+            hButtonAddPreset = CreateWindow(L"BUTTON", L"添加",
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                305, 228, 50, 22, hwnd, (HMENU)ID_BUTTON_ADD_PRESET, GetModuleHandle(NULL), NULL);
 
+            // Advanced Settings Area
+            CreateWindow(L"BUTTON", L"高级设置",
+                WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                10, 270, 360, 50, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            CreateWindow(L"STATIC", L"按键时长:",
+                WS_CHILD | WS_VISIBLE,
+                20, 290, 80, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
             hEditKeyDuration = CreateWindow(L"EDIT", L"500",
                 WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-                145, 213, 50, 22, hwnd, (HMENU)ID_EDIT_KEY_DURATION, GetModuleHandle(NULL), NULL);
-
-            CreateWindow(L"STATIC", L"ms",
+                105, 288, 50, 22, hwnd, (HMENU)ID_EDIT_KEY_DURATION, GetModuleHandle(NULL), NULL);
+            CreateWindow(L"STATIC", L"毫秒 (10-2000)",
                 WS_CHILD | WS_VISIBLE,
-                200, 215, 20, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
-
-            // Create delay info (static display)
-            CreateWindow(L"STATIC", L"Single: 400-900ms, Sequence: 30-400ms",
+                160, 290, 80, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+            CreateWindow(L"STATIC", L"延迟: 单次 400-900ms, 序列 30-400ms",
                 WS_CHILD | WS_VISIBLE,
-                20, 240, 220, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
+                245, 290, 120, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
 
             // Initialize presets and update combo
             InitializePresets();
             UpdatePresetCombo();
 
-            // Add initial instructions
-            AddLog(L"=== Enhanced Key Simulator with Sequences ===");
-            AddLog(L"Press ~ key to start/stop key simulation");
-            AddLog(L"Use preset sequences or single key input");
-            AddLog(L"Sequences: Each key pressed individually with delays");
-            AddLog(L"Single key: 400-900ms, Sequences: 30-400ms");
-            AddLog(L"Key hold duration: 10ms to user-defined max (default 500ms)");
-            AddLog(L"~ key toggles start/stop at any time");
-            AddLog(L"Select mode: 1x/Multi/Infinite");
-            AddLog(L"Add custom presets: Name + Keys (e.g., a+b+c)");
-            AddLog(L"Ready, waiting for hotkey trigger...");
+            // Add initialization info
+            AddLog(L"=== MN按键模拟器 v1.1.0 ===");
+            AddLog(L"热键: 按 ~ 键开始/停止模拟");
+            AddLog(L"功能: 预设序列和单键模拟");
+            AddLog(L"模式: 单次/5次/无限");
+            AddLog(L"时长: 可配置 10-2000毫秒 (默认 500毫秒)");
+            AddLog(L"准备就绪, 等待操作...");
         }
         break;
 
@@ -597,11 +680,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 // Update mode hint
                 int mode = GetSelectedMode();
                 if (mode == 0) {
-                    AddLog(L"[Mode] Selected: Single mode");
+                    AddLog(L"[模式] 已选择: 单次模式");
                 } else if (mode == 1) {
-                    AddLog(L"[Mode] Selected: Multi mode (5 times)");
+                    AddLog(L"[模式] 已选择: 多次模式 (5 次)");
                 } else {
-                    AddLog(L"[Mode] Selected: Infinite mode");
+                    AddLog(L"[模式] 已选择: 无限模式");
                 }
             }
             break;
@@ -615,11 +698,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 int sel = SendMessage(hComboPresets, CB_GETCURSEL, 0, 0);
                 if (sel > 0 && sel <= presetCount) {
                     wchar_t logText[200];
-                    wsprintf(logText, L"[Preset] Selected: %s = %s",
+                    wsprintf(logText, L"[预设] 已选择: %s = %s",
                              presets[sel - 1].name, presets[sel - 1].keys);
                     AddLog(logText);
                 } else {
-                    AddLog(L"[Preset] Cleared selection");
+                    AddLog(L"[预设] 已清除选择");
                 }
             }
             break;
@@ -640,10 +723,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     SetWindowText(hEditPresetKeys, L"");
 
                     wchar_t logText[200];
-                    wsprintf(logText, L"[Preset] Added: %s = %s", name, keys);
+                    wsprintf(logText, L"[预设] 已添加: %s = %s", name, keys);
                     AddLog(logText);
                 } else {
-                    AddLog(L"[Error] Invalid preset or limit reached (max 10)");
+                    AddLog(L"[错误] 无效预设或达到限制 (最多 10 个)");
                 }
             }
             break;
@@ -655,7 +738,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 GetWindowText(hEditKeyInput, keyText, 10);
                 if (wcslen(keyText) > 0) {
                     wchar_t logText[100];
-                    wsprintf(logText, L"[Key] Changed to: '%c'", keyText[0]);
+                    wsprintf(logText, L"[按键] 已更改为: '%c'", keyText[0]);
                     AddLog(logText);
                 }
             }
@@ -669,7 +752,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 int duration = _wtoi(durationText);
                 if (duration >= 10 && duration <= 2000) {
                     wchar_t logText[100];
-                    wsprintf(logText, L"[Duration] Key hold time: 10-%dms", duration);
+                    wsprintf(logText, L"[时长] 按键保持时间: 10-%d毫秒", duration);
                     AddLog(logText);
                 }
             }
@@ -685,7 +768,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
     case WM_HOTKEY:
         if (wParam == HOTKEY_TOGGLE) {
-            AddLog(L"[Hotkey] ~ key pressed");
+            AddLog(L"[热键] ~ 键被按下");
             ToggleKeySimulation();
         }
         break;
@@ -694,8 +777,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         {
             RECT rect;
             GetClientRect(hwnd, &rect);
-            // Adjust listbox size
-            SetWindowPos(hListBox, NULL, 10, 10, rect.right - 20, 100, SWP_NOZORDER);
+            // Adjust log area size to fit window
+            SetWindowPos(hListBox, NULL, 10, 30, rect.right - 20, 80, SWP_NOZORDER);
         }
         break;
 
@@ -737,7 +820,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     HWND hwnd = CreateWindowEx(
         0, CLASS_NAME, L"MN",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 350, 320,
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 400, 370,
         NULL, NULL, hInstance, NULL);
 
     if (hwnd == NULL) {
